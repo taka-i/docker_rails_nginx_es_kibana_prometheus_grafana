@@ -1,0 +1,119 @@
+version: '3'
+services:
+  db:
+    build: containers/mysql
+    env_file:
+      - ./environments/common.env
+      - ./environments/db.env
+    volumes:
+      - ../volumes/db/data:/var/lib/mysql
+    command: --innodb-use-native-aio=0 # InnoDB: Operating system error number 22 in a file operation. error avoid for dev ops
+  app:
+    build: containers/rails
+    env_file:
+      - ./environments/common.env
+      - ./environments/db.env
+    command: bundle exec puma -C config/puma.rb
+    volumes:
+      - ../volumes/app:/app
+      - data-shared-volume:/data-shared-volume
+    depends_on:
+      - db
+  web:
+    build: containers/nginx
+    env_file:
+      - ./environments/common.env
+    volumes:
+      - ../volumes/app:/app
+      - ../volumes/web/log:/var/log/nginx/
+      - ../volumes/ssl:/etc/nginx/cert/
+      - data-shared-volume:/data-shared-volume
+    ports:
+      - 443:443
+    depends_on:
+      - app
+  fluentd:
+    build: containers/fluentd
+    env_file:
+      - ./environments/common.env
+    volumes:
+      - ./containers/fluentd/config:/fluentd/etc
+      - ../volumes/fluentd/log:/fluentd/log
+      - ../volumes/web/log:/var/log/nginx:ro
+    links:
+      - elasticsearch
+    ports:
+      - "24224:24224"
+    depends_on:
+      - elasticsearch
+  elasticsearch:
+    image: elasticsearch:7.0.0
+    environment:
+      - discovery.type=single-node
+    # volumes:
+      # - ./containers/es/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    ports:
+      - "9200:9200"
+  kibana:
+    image: kibana:7.0.0
+    ports:
+      - 5601:5601
+    depends_on:
+      - elasticsearch
+  prometheus:
+     image: prom/prometheus
+     container_name: prometheus
+     restart: always
+     volumes:
+       - ./containers/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+     ports:
+       - 9090:9090
+     links:
+       - cadvisor
+       - node_exporter
+     environment:
+       VIRTUAL_HOST: prometheus.prometheus.example.com
+       LETSENCRYPT_HOST: prometheus.prometheus.example.com
+       LETSENCRYPT_EMAIL: hoge@example.com
+  cadvisor:
+     image: google/cadvisor:latest
+     container_name: cadvisor
+     restart: always
+     volumes:
+       - /:/rootfs:ro
+       - /var/run:/var/run:rw
+       - /sys:/sys:ro
+       - /var/lib/docker/:/var/lib/docker:ro
+     ports:
+       - 8080:8080
+  node_exporter:
+     image: prom/node-exporter
+     container_name: node_exporter
+     restart: always
+     volumes:
+       - /proc:/host/proc:ro
+       - /sys:/host/sys:ro
+       - /:/rootfs:ro
+     ports:
+       - 9100:9100
+  grafana:
+     image: grafana/grafana
+     container_name: grafana
+     restart: always
+     ports:
+       - 3000:3000
+     links:
+       - prometheus
+       - cadvisor
+       - node_exporter
+     environment:
+       GF_SECURITY_ADMIN_USER: yourname
+       GF_SECURITY_ADMIN_PASSWORD: password
+       GF_USERS_ALLOW_SIGN_UP: "false"
+       GF_USERS_ALLOW_ORG_CREATE: "false"
+       VIRTUAL_HOST: prometheus.example.com
+       LETSENCRYPT_HOST: prometheus.example.com
+       LETSENCRYPT_EMAIL: hoge@example.com
+
+volumes:
+  data-shared-volume:
